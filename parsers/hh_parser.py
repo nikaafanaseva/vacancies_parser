@@ -1,94 +1,135 @@
 import aiohttp
-import asyncio
-import random
-from bs4 import BeautifulSoup
 import logging
-import urllib.parse
+import asyncio
+import re
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-]
 
-async def get_hh_vacancies(keyword: str):
-    """Парсинг вакансий с hh.ru через HTML-парсинг (без API)"""
-    vacancies = []
+class HHParser:
+    """
+    Парсер HeadHunter через ОФИЦИАЛЬНОЕ API.
+    Не требует регистрации, токенов и ключей.
+    Нужен только корректный User-Agent.
+    Документация: https://github.com/hhru/api
+    """
     
-    encoded_keyword = urllib.parse.quote(keyword)
-    url = f"https://hh.ru/search/vacancy?text={encoded_keyword}&area=113&items_on_page=10"
-    
-    headers = {
-        'User-Agent': random.choice(USER_AGENTS),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
-        'Referer': 'https://hh.ru/',
-    }
-    
-    logger.info(f"HH парсинг: {keyword}")
-    
-    try:
-        await asyncio.sleep(random.uniform(1, 2))
+    def __init__(self):
+        # ВАЖНО: User-Agent должен быть осмысленным, иначе 403 ошибка
+        self.headers = {
+            "User-Agent": "VacancyBot/1.0 (vacancies_parser; contact@example.com)",
+            "Accept": "application/json",
+            "Accept-Language": "ru-RU,ru;q=0.9",
+        }
+        self.api_url = "https://api.hh.ru/vacancies"
+
+    def _clean_html(self, html_text: str) -> str:
+        """Убирает HTML-теги из описания вакансии"""
+        if not html_text:
+            return ""
+        soup = BeautifulSoup(html_text, 'lxml')
+        return soup.get_text(separator=' ', strip=True)
+
+    def _format_salary(self, salary: dict) -> str:
+        """Форматирует зарплату из API"""
+        if not salary:
+            return "Не указано"
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=15) as response:
-                
-                if response.status == 200:
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
+        parts = []
+        if salary.get("from"):
+            parts.append(f"от {salary['from']:,}".replace(",", " "))
+        if salary.get("to"):
+            parts.append(f"до {salary['to']:,}".replace(",", " "))
+        
+        if not parts:
+            return "Не указано"
+        
+        result = " ".join(parts)
+        currency = salary.get("currency", "")
+        if currency:
+            symbols = {"RUR": "₽", "RUB": "₽", "USD": "$", "EUR": "€", "BYR": "Br"}
+            result += f" {symbols.get(currency, currency)}"
+        
+        if salary.get("gross"):
+            result += " (до вычета налогов)"
+        
+        return result
+
+    async def search(self, query: str, limit: int = 10) -> list:
+        """Поиск вакансий через API hh.ru"""
+        results = []
+        
+        params = {
+            "text": query,
+            "per_page": min(limit, 100),  # API максимум 100 за раз
+            "page": 0,
+            "order_by": "publication_time",  # Сначала новые
+        }
+        
+        try:
+            logger.info(f"🔍 HH.ru API: поиск '{query}'")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self.api_url,
+                    params=params,
+                    headers=self.headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status == 403:
+                        logger.error("❌ HH.ru: 403 Forbidden. Проверь User-Agent!")
+                        return []
+                    if resp.status == 429:
+                        logger.error("❌ HH.ru: слишком много запросов (Rate Limit)")
+                        return []
+                    if resp.status != 200:
+                        logger.error(f"❌ HH.ru: HTTP {resp.status}")
+                        return []
                     
-                    items = soup.find_all('div', {'data-qa': 'vacancy-serp__vacancy'})
+                    data = await resp.json()
+            
+            logger.info(f"📦 HH.ru: API вернул {data.get('found', 0)} вакансий")
+            
+            items = data.get("items", [])
+            for item in items[:limit]:
+                try:
+                    salary = self._format_salary(item.get("salary"))
                     
-                    if not items:
-                        items = soup.find_all('div', class_='serp-item')
+                    # Локация
+                    location = "Не указано"
+                    area = item.get("area")
+                    if area:
+                        location = area.get("name", "Не указано")
                     
-                    for item in items[:5]:
-                        try:
-                            title_elem = item.find('a', {'data-qa': 'vacancy-serp__vacancy-title'})
-                            if not title_elem:
-                                title_elem = item.find('a', class_='serp-item__title')
-                            
-                            if title_elem:
-                                title = title_elem.text.strip()
-                                link = title_elem.get('href')
-                            else:
-                                continue
-                            
-                            company_elem = item.find('div', {'data-qa': 'vacancy-serp__vacancy-employer'})
-                            if not company_elem:
-                                company_elem = item.find('div', class_='vacancy-serp-item__meta-info-company')
-                            company = company_elem.text.strip() if company_elem else 'Не указана'
-                            
-                            salary_elem = item.find('span', {'data-qa': 'vacancy-serp__vacancy-compensation'})
-                            salary = salary_elem.text.strip() if salary_elem else 'Не указана'
-                            
-                            address_elem = item.find('div', {'data-qa': 'vacancy-serp__vacancy-address'})
-                            city = address_elem.text.strip() if address_elem else 'Не указан'
-                            
-                            vacancies.append({
-                                'title': title,
-                                'company': company,
-                                'salary': salary,
-                                'city': city,
-                                'url': link,
-                                'source': 'hh.ru'
-                            })
-                        except Exception as e:
-                            logger.error(f"Ошибка парсинга: {e}")
-                            continue
+                    # Компания
+                    employer = item.get("employer")
+                    company = employer.get("name", "Не указано") if employer else "Не указано"
                     
-                    logger.info(f"HH: найдено {len(vacancies)} вакансий")
-                    return vacancies
+                    # Убираем HTML из сниппета
+                    snippet = item.get("snippet", {}) or {}
+                    responsibility = snippet.get("responsibility", "") or ""
+                    requirement = snippet.get("requirement", "") or ""
+                    description = f"{responsibility} {requirement}".strip()
                     
-                else:
-                    logger.error(f"HH ошибка: статус {response.status}")
-                    return []
-                    
-    except asyncio.TimeoutError:
-        logger.error("HH таймаут")
-        return []
-    except Exception as e:
-        logger.error(f"HH ошибка: {e}")
-        return []
+                    results.append({
+                        "title": item.get("name", "Вакансия"),
+                        "company": company,
+                        "salary": salary,
+                        "location": location,
+                        "url": item.get("alternate_url", ""),
+                        "source": "hh.ru",
+                        "description": description[:200] + "..." if len(description) > 200 else description,
+                    })
+                except Exception as e:
+                    logger.warning(f"⚠️ HH: ошибка обработки вакансии: {e}")
+                    continue
+            
+            logger.info(f"✅ HH.ru: обработано {len(results)} вакансий")
+            
+        except asyncio.TimeoutError:
+            logger.error("❌ HH.ru: таймаут запроса")
+        except Exception as e:
+            logger.error(f"❌ HH.ru: {e}", exc_info=True)
+        
+        return results
