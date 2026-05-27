@@ -1,20 +1,19 @@
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 
-def unpack_firecrawl_response(response: Dict) -> Tuple[str, str]:
+def unpack_firecrawl_response(response: Any) -> Tuple[str, str]:
     """
-    Нормализует ответ firecrawl-py:
-    - иногда SDK возвращает payload с ключом data
-    - иногда сразу data-объект
+    Firecrawl может вернуть:
+    1) {"success": true, "data": {...}}
+    2) сразу {...}
     """
     if not isinstance(response, dict):
         return "", ""
 
-    data = response.get("data", response)
+    data: Dict = response.get("data", response)
     if not isinstance(data, dict):
         return "", ""
 
     html = data.get("html") or data.get("rawHtml") or ""
     markdown = data.get("markdown") or ""
-
     return html, markdown
