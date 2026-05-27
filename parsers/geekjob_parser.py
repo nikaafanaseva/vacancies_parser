@@ -1,76 +1,98 @@
 import aiohttp
-import asyncio
-import random
-from bs4 import BeautifulSoup
 import logging
-import urllib.parse
+import asyncio
+import re
+from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
 
 logger = logging.getLogger(__name__)
 
-async def get_geekjob_vacancies(keyword: str):
-    """Парсинг вакансий с geekjob.ru"""
-    vacancies = []
+
+class GeekJobParser:
+    """Парсер geekjob.ru"""
     
-    encoded_keyword = urllib.parse.quote(keyword)
-    url = f"https://geekjob.ru/vacancies?q={encoded_keyword}"
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    }
-    
-    logger.info(f"GeekJob URL: {url}")
-    
-    try:
-        await asyncio.sleep(random.uniform(0.5, 1.5))
+    def __init__(self):
+        self.ua = UserAgent()
+        self.base_url = "https://geekjob.ru"
+
+    def _get_headers(self):
+        return {
+            "User-Agent": self.ua.random,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            "Referer": "https://geekjob.ru/",
+            "Connection": "keep-alive",
+        }
+
+    async def search(self, query: str, limit: int = 10) -> list:
+        results = []
+        params = {"q": query}
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=15) as response:
-                
-                if response.status == 200:
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
+        try:
+            logger.info(f"🔍 GeekJob: поиск '{query}'")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self.base_url,
+                    params=params,
+                    headers=self._get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    allow_redirects=True
+                ) as resp:
+                    if resp.status != 200:
+                        logger.error(f"❌ GeekJob: HTTP {resp.status}")
+                        return []
+                    html = await resp.text()
+            
+            soup = BeautifulSoup(html, 'lxml')
+            
+            cards = (
+                soup.find_all("div", class_=re.compile(r"vacancy|job", re.I)) or
+                soup.find_all("article") or
+                soup.find_all("li")
+            )
+            
+            logger.info(f"📦 GeekJob: найдено {len(cards)} карточек")
+            
+            for card in cards[:limit]:
+                try:
+                    title_tag = card.find("a") or card.find(["h2", "h3"])
+                    if not title_tag:
+                        continue
                     
-                    cards = soup.find_all('div', class_='vacancy-list-item')
-                    if not cards:
-                        cards = soup.find_all('div', class_='card')
+                    title = title_tag.get_text(strip=True)
+                    link = title_tag.get("href", "") if title_tag.name == "a" else ""
                     
-                    for card in cards[:5]:
-                        try:
-                            title_elem = card.find('a', class_='vacancy-title')
-                            if not title_elem:
-                                title_elem = card.find('h2') or card.find('h3')
-                            
-                            if title_elem:
-                                title = title_elem.text.strip()
-                                link = title_elem.get('href', '')
-                                if link and not link.startswith('http'):
-                                    link = 'https://geekjob.ru' + link
-                            else:
-                                continue
-                            
-                            company_elem = card.find('div', class_='company')
-                            if not company_elem:
-                                company_elem = card.find('span', class_='company-name')
-                            company = company_elem.text.strip() if company_elem else 'Не указана'
-                            
-                            vacancies.append({
-                                'title': title,
-                                'company': company,
-                                'salary': 'Не указана',
-                                'city': 'Не указан',
-                                'url': link,
-                                'source': 'geekjob.ru'
-                            })
-                        except Exception as e:
-                            logger.error(f"Ошибка GeekJob: {e}")
-                            continue
+                    if link and not link.startswith("http"):
+                        link = f"https://geekjob.ru{link}"
                     
-                else:
-                    logger.warning(f"GeekJob статус: {response.status}")
+                    company_tag = card.find(class_=re.compile(r"company|employer", re.I))
+                    company = company_tag.get_text(strip=True) if company_tag else "Не указано"
                     
-    except Exception as e:
-        logger.error(f"GeekJob ошибка: {e}")
-    
-    logger.info(f"GeekJob: найдено {len(vacancies)}")
-    return vacancies
+                    salary_tag = card.find(class_=re.compile(r"salary|compensation", re.I))
+                    salary = salary_tag.get_text(strip=True) if salary_tag else "Не указано"
+                    
+                    location_tag = card.find(class_=re.compile(r"location|city", re.I))
+                    location = location_tag.get_text(strip=True) if location_tag else "Не указано"
+                    
+                    if title and len(title) > 3:
+                        results.append({
+                            "title": title,
+                            "company": company,
+                            "salary": salary,
+                            "location": location,
+                            "url": link,
+                            "source": "geekjob.ru",
+                        })
+                except Exception as e:
+                    logger.warning(f"⚠️ GeekJob: {e}")
+                    continue
+            
+            logger.info(f"✅ GeekJob: {len(results)} вакансий")
+            
+        except asyncio.TimeoutError:
+            logger.error("❌ GeekJob: таймаут")
+        except Exception as e:
+            logger.error(f"❌ GeekJob: {e}", exc_info=True)
+        
+        return results
