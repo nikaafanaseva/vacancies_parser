@@ -14,16 +14,12 @@ USER_AGENTS = [
 ]
 
 async def get_hh_vacancies(keyword: str):
-    """Парсинг hh.ru через поисковую выдачу (без API)"""
+    """Парсинг вакансий с hh.ru через HTML-парсинг (без API)"""
     vacancies = []
     
-    # Кодируем запрос
     encoded_keyword = urllib.parse.quote(keyword)
-    
-    # Используем поисковую выдачу, а не API
     url = f"https://hh.ru/search/vacancy?text={encoded_keyword}&area=113&items_on_page=10"
     
-    # Случайный User-Agent
     headers = {
         'User-Agent': random.choice(USER_AGENTS),
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -31,10 +27,9 @@ async def get_hh_vacancies(keyword: str):
         'Referer': 'https://hh.ru/',
     }
     
-    logger.info(f"HH API запрос: {keyword}")
+    logger.info(f"HH парсинг: {keyword}")
     
     try:
-        # Задержка перед запросом
         await asyncio.sleep(random.uniform(1, 2))
         
         async with aiohttp.ClientSession() as session:
@@ -44,34 +39,33 @@ async def get_hh_vacancies(keyword: str):
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Ищем карточки вакансий
                     items = soup.find_all('div', {'data-qa': 'vacancy-serp__vacancy'})
                     
                     if not items:
-                        # Альтернативный селектор для hh
                         items = soup.find_all('div', class_='serp-item')
                     
-                    for item in items[:5]:  # Берем первые 5
+                    for item in items[:5]:
                         try:
-                            # Название и ссылка
                             title_elem = item.find('a', {'data-qa': 'vacancy-serp__vacancy-title'})
+                            if not title_elem:
+                                title_elem = item.find('a', class_='serp-item__title')
+                            
                             if title_elem:
                                 title = title_elem.text.strip()
                                 link = title_elem.get('href')
                             else:
                                 continue
                             
-                            # Компания
                             company_elem = item.find('div', {'data-qa': 'vacancy-serp__vacancy-employer'})
+                            if not company_elem:
+                                company_elem = item.find('div', class_='vacancy-serp-item__meta-info-company')
                             company = company_elem.text.strip() if company_elem else 'Не указана'
                             
-                            # Зарплата
                             salary_elem = item.find('span', {'data-qa': 'vacancy-serp__vacancy-compensation'})
-                            salary = salary_elem.text.strip() if salary_elem else 'Зарплата не указана'
+                            salary = salary_elem.text.strip() if salary_elem else 'Не указана'
                             
-                            # Город
                             address_elem = item.find('div', {'data-qa': 'vacancy-serp__vacancy-address'})
-                            city = address_elem.text.strip() if address_elem else 'Город не указан'
+                            city = address_elem.text.strip() if address_elem else 'Не указан'
                             
                             vacancies.append({
                                 'title': title,
@@ -82,22 +76,19 @@ async def get_hh_vacancies(keyword: str):
                                 'source': 'hh.ru'
                             })
                         except Exception as e:
-                            logger.error(f"Ошибка парсинга карточки: {e}")
+                            logger.error(f"Ошибка парсинга: {e}")
                             continue
                     
-                    logger.info(f"HH: найдено {len(vacancies)}")
+                    logger.info(f"HH: найдено {len(vacancies)} вакансий")
                     return vacancies
                     
-                elif response.status == 403:
-                    logger.error("HH API: доступ запрещен (403) - нужно больше задержка или прокси")
-                    return []
                 else:
-                    logger.error(f"HH API ошибка: статус {response.status}")
+                    logger.error(f"HH ошибка: статус {response.status}")
                     return []
                     
     except asyncio.TimeoutError:
-        logger.error("HH API: таймаут")
+        logger.error("HH таймаут")
         return []
     except Exception as e:
-        logger.error(f"HH API ошибка: {e}")
+        logger.error(f"HH ошибка: {e}")
         return []
