@@ -1,7 +1,7 @@
 import logging
 import re
-from firecrawl import FirecrawlApp
 from bs4 import BeautifulSoup
+from firecrawl import FirecrawlApp
 
 from parsers.firecrawl_utils import unpack_firecrawl_response
 
@@ -14,16 +14,12 @@ class GeekJobParser:
         self.app = FirecrawlApp(api_key=api_key)
 
     async def search(self, query: str, limit: int = 5) -> list:
-        logger.info(f"GeekJob: поиск '{query}'")
         results = []
-
         try:
             url = f"{self.base_url}?q={query.replace(' ', '+')}"
-            response = self.app.scrape_url(
-                url,
-                params={"formats": ["html", "markdown"], "onlyMainContent": False},
-            )
+            logger.info(f"GeekJob URL: {url}")
 
+            response = self.app.scrape_url(url, formats=["markdown", "html"])
             html, markdown = unpack_firecrawl_response(response)
 
             # 1) HTML
@@ -31,18 +27,21 @@ class GeekJobParser:
                 soup = BeautifulSoup(html, "lxml")
                 cards = soup.find_all(["article", "div", "li"], class_=re.compile(r"vacancy|job", re.I))
 
-                for card in cards[: limit * 3]:
+                for card in cards:
+                    if len(results) >= limit:
+                        break
+
                     title_tag = card.find(["h2", "h3", "a"])
                     if not title_tag:
                         continue
 
-                    title = title_tag.get_text(strip=True)
+                    title = title_tag.get_text(" ", strip=True)
                     if len(title) < 4:
                         continue
 
                     link_tag = card.find("a")
                     link = link_tag.get("href", "") if link_tag else ""
-                    if link and not link.startswith("http"):
+                    if link and link.startswith("/"):
                         link = f"https://geekjob.ru{link}"
 
                     company_tag = card.find(class_=re.compile(r"company|employer", re.I))
@@ -52,20 +51,20 @@ class GeekJobParser:
                     results.append(
                         {
                             "title": title,
-                            "company": company_tag.get_text(strip=True) if company_tag else "Не указано",
-                            "salary": salary_tag.get_text(strip=True) if salary_tag else "Не указано",
-                            "location": location_tag.get_text(strip=True) if location_tag else "Не указано",
+                            "company": company_tag.get_text(" ", strip=True) if company_tag else "Не указано",
+                            "salary": salary_tag.get_text(" ", strip=True) if salary_tag else "Не указана",
+                            "location": location_tag.get_text(" ", strip=True) if location_tag else "Не указано",
                             "url": link,
                             "source": "geekjob.ru",
                         }
                     )
-                    if len(results) >= limit:
-                        return results
 
             # 2) Fallback markdown
-            if markdown and len(results) < limit:
+            if len(results) < limit and markdown:
                 links = re.findall(r"\[([^\]]+)\]\((https?://geekjob\.ru[^\)]+)\)", markdown)
                 for title, link in links:
+                    if len(results) >= limit:
+                        break
                     title = title.strip()
                     if len(title) < 4:
                         continue
@@ -73,17 +72,15 @@ class GeekJobParser:
                         {
                             "title": title,
                             "company": "Не указано",
-                            "salary": "Не указано",
+                            "salary": "Не указана",
                             "location": "Не указано",
                             "url": link,
                             "source": "geekjob.ru",
                         }
                     )
-                    if len(results) >= limit:
-                        break
 
         except Exception as e:
-            logger.error(f"GeekJob error: {e}", exc_info=True)
+            logger.error(f"GeekJobParser error: {e}", exc_info=True)
 
         logger.info(f"GeekJob: найдено {len(results)}")
         return results
