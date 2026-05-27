@@ -1,7 +1,7 @@
-import asyncio
 import logging
-import os
 import sys
+import os
+import asyncio
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
@@ -16,111 +16,124 @@ from utils import format_results, safe_format_query
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    stream=sys.stdout,
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
 if not settings.BOT_TOKEN:
-    logger.error("BOT_TOKEN не установлен")
+    logger.error("❌ BOT_TOKEN не установлен!")
     sys.exit(1)
-
-# Firecrawl API key нужен только для getmatch и geekjob.
-# HH.ru использует бесплатный публичный API — ключ не нужен!
 
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
+# Инициализация парсеров
 parsers = {
-    "hh.ru": HHParser(),  # ← БЕЗ api_key!
-    "getmatch.ru": GetMatchParser(api_key=settings.FIRECRAWL_API_KEY),
-    "geekjob.ru": GeekJobParser(api_key=settings.FIRECRAWL_API_KEY),
+    "hh.ru": HHParser(),
+    "getmatch.ru": GetMatchParser(),
+    "geekjob.ru": GeekJobParser(),
 }
 
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     await message.answer(
-        "Бот поиска вакансий\n\n"
-        "Команда:\n"
-        "/search <запрос>\n\n"
-        "Примеры:\n"
-        "/search маркетинг\n"
-        "/search python разработчик удаленно\n\n"
-        "Источники: hh.ru (API), getmatch.ru, geekjob.ru"
+        "👋 <b>Бот поиска вакансий</b>\n\n"
+        "Используй: <code>/search &lt;должность&gt;</code>\n\n"
+        "<b>Примеры:</b>\n"
+        "<code>/search маркетолог</code>\n"
+        "<code>/search Python разработчик</code>\n"
+        "<code>/search SMM менеджер</code>\n\n"
+        "<b>📡 Источники:</b>\n"
+        "• hh.ru (официальное API)\n"
+        "• getmatch.ru\n"
+        "• geekjob.ru",
+        parse_mode="HTML"
     )
 
 
 @dp.message(Command("search"))
 async def cmd_search(message: Message):
     args = message.text.split(maxsplit=1)
-
     if len(args) < 2:
-        await message.answer("Неверный формат. Используй: /search <запрос>")
-        return
-
-    query = safe_format_query(args[1])
-    status_msg = await message.answer(f"Ищу вакансии по запросу: {query}")
-
-    tasks = [
-        parsers[source].search(query, limit=settings.MAX_RESULTS)
-        for source in settings.ENABLED_SOURCES
-        if source in parsers
-    ]
-
-    if not tasks:
-        await status_msg.edit_text("Нет активных источников поиска.")
-        return
-
-    try:
-        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
-    except Exception as e:
-        logger.error(f"Ошибка поиска: {e}", exc_info=True)
-        await status_msg.edit_text(f"Ошибка поиска: {e}")
-        return
-
-    all_results = []
-    for source_name, res in zip(settings.ENABLED_SOURCES, results_lists):
-        if isinstance(res, list):
-            logger.info(f"{source_name}: найдено {len(res)} вакансий")
-            all_results.extend(res)
-        else:
-            logger.error(f"{source_name} ошибка: {res}")
-
-    if not all_results:
-        await status_msg.edit_text(
-            "Ничего не найдено.\n"
-            "Попробуй упростить запрос: /search маркетолог"
+        await message.answer(
+            "❌ Формат: <code>/search &lt;запрос&gt;</code>",
+            parse_mode="HTML"
         )
         return
 
-    text = format_results(all_results[: settings.MAX_RESULTS])
-    # Telegram лимит 4096 символов
-    if len(text) > 4000:
-        text = text[:4000] + "\n... (результаты обрезаны)"
-    await status_msg.edit_text(text, disable_web_page_preview=True)
+    query = safe_format_query(args[1])
+    logger.info(f"🔍 Поиск от {message.from_user.id}: '{query}'")
+    
+    status_msg = await message.answer(
+        f"🔎 <b>Ищу:</b> <code>{query}</code>\n⏳ Секундочку...",
+        parse_mode="HTML"
+    )
+
+    # Запускаем все парсеры параллельно
+    tasks = []
+    for source in settings.ENABLED_SOURCES:
+        if source in parsers:
+            tasks.append(parsers[source].search(query, limit=settings.MAX_RESULTS))
+    
+    try:
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+    except Exception as e:
+        logger.error(f"❌ Ошибка: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Ошибка: <code>{e}</code>", parse_mode="HTML")
+        return
+
+    # Собираем результаты
+    all_results = []
+    for i, res in enumerate(results_lists):
+        source = settings.ENABLED_SOURCES[i] if i < len(settings.ENABLED_SOURCES) else "?"
+        if isinstance(res, Exception):
+            logger.error(f"❌ {source}: {res}")
+        elif isinstance(res, list):
+            logger.info(f"✅ {source}: {len(res)}")
+            all_results.extend(res)
+        else:
+            logger.warning(f"⚠️ {source}: неожиданный тип {type(res)}")
+
+    if not all_results:
+        await status_msg.edit_text(
+            "😔 <b>Ничего не найдено</b>\n"
+            "Попробуйте другой запрос.",
+            parse_mode="HTML"
+        )
+        return
+
+    formatted = format_results(all_results[:settings.MAX_RESULTS])
+    await status_msg.edit_text(
+        formatted,
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
 
 
 @dp.message()
-async def fallback(message: Message):
-    await message.answer("Используй /search <запрос>, например: /search маркетинг")
+async def echo_handler(message: Message):
+    await message.answer(
+        "🤔 Используй <code>/search маркетолог</code>",
+        parse_mode="HTML"
+    )
 
 
 async def main():
-    async def health(_request):
-        return web.Response(text="OK")
+    async def handle(request):
+        return web.Response(text="✅ Bot is alive")
 
     app = web.Application()
-    app.router.add_get("/", health)
-
+    app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
 
-    port = int(os.getenv("PORT", "10000"))
+    port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    logger.info(f"🌐 Server on port {port}")
 
-    logger.info(f"Health server started on port {port}")
-    logger.info("Bot polling started")
+    logger.info("🤖 Starting bot...")
     await dp.start_polling(bot)
 
 
