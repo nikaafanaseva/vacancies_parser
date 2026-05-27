@@ -59,7 +59,7 @@ async def cmd_search(message: Message):
     status = await message.answer("🔎 <b>Ищу вакансии...</b>", parse_mode="HTML")
     
     tasks = []
-    for source in settings.ENABLED_SOURCES:
+    for source in settings.get_sources():
         if source in parsers:
             logger.info(f"🚀 Запуск {source}")
             tasks.append(parsers[source].search(query, limit=settings.MAX_RESULTS))
