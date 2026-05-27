@@ -1,5 +1,5 @@
 from .base import BaseParser
 
-class HHParser(BaseParser):
+class GetMatchParser(BaseParser):
     def __init__(self):
-        super().__init__("hh.ru")
+        super().__init__("getmatch.ru")
