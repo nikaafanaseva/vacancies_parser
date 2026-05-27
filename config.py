@@ -6,6 +6,9 @@ load_dotenv()
 
 class Settings:
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+    
+    # Firecrawl ключ — только для getmatch и geekjob.
+    # HH.ru работает БЕЗ него! Если ключа нет — hh.ru всё равно будет искать.
     FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY", "")
 
     MAX_RESULTS: int = int(os.getenv("MAX_RESULTS", "5"))
