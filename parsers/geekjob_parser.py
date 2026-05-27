@@ -1,76 +1,75 @@
-import asyncio
 import logging
-from playwright.async_api import async_playwright
+from firecrawl import FirecrawlApp
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
 class GeekJobParser:
-    def __init__(self):
+    def __init__(self, api_key: str):
         self.base_url = "https://geekjob.ru"
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
+        self.app = FirecrawlApp(api_key=api_key)
 
     async def search(self, query: str, limit: int = 5) -> list:
-        logger.info(f"🔍 GeekJobParser: поиск по запросу '{query}'")
+        logger.info(f"🔍 GeekJob: поиск '{query}'")
         results = []
         
         try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(
-                    user_agent=self.headers["User-Agent"],
-                    viewport={"width": 1920, "height": 1080}
-                )
-                page = await context.new_page()
-                
-                url = f"{self.base_url}/?q={query.replace(' ', '+')}"
-                logger.info(f"📡 GeekJobParser: запрос к {url}")
-                
-                await page.goto(url, timeout=30000, wait_until="networkidle")
-                await asyncio.sleep(2)
-                
-                vacancy_cards = await page.query_selector_all(".vacancy, .job-card, article.job")
-                
-                for card in vacancy_cards[:limit]:
-                    try:
-                        title_elem = await card.query_selector("h2 a, .title a, h3 a")
-                        title = await title_elem.inner_text() if title_elem else "Не указано"
-                        
-                        link_elem = await card.query_selector("h2 a, .title a, h3 a")
-                        link = await link_elem.get_attribute("href") if link_elem else ""
-                        
-                        if link and not link.startswith("http"):
-                            link = f"https://geekjob.ru{link}"
-                        
-                        company_elem = await card.query_selector(".company, .employer")
-                        company = await company_elem.inner_text() if company_elem else "Не указано"
-                        
-                        salary_elem = await card.query_selector(".salary, .compensation")
-                        salary = await salary_elem.inner_text() if salary_elem else "Не указано"
-                        
-                        location_elem = await card.query_selector(".location, .city")
-                        location = await location_elem.inner_text() if location_elem else "Не указано"
-                        
-                        if title and title != "Не указано":
-                            results.append({
-                                "title": title.strip(),
-                                "company": company.strip(),
-                                "salary": salary.strip(),
-                                "location": location.strip(),
-                                "url": link,
-                                "source": "geekjob.ru"
-                            })
-                            logger.info(f"✅ GeekJobParser: найдено - {title[:50]}...")
-                            
-                    except Exception as e:
-                        logger.warning(f"⚠️ GeekJobParser: ошибка при парсинге: {e}")
+            url = f"{self.base_url}/?q={query.replace(' ', '+')}"
+            logger.info(f"📡 GeekJob: {url}")
+            
+            response = self.app.scrape_url(url, params={'formats': ['markdown', 'html']})
+            
+            if not response.get('success'):
+                logger.error("❌ GeekJob: ошибка скрейпинга")
+                return results
+            
+            html = response.get('html', '')
+            if not html:
+                logger.warning("⚠️ GeekJob: пустой HTML")
+                return results
+            
+            soup = BeautifulSoup(html, 'lxml')
+            cards = soup.find_all(["article", "div"], class_=re.compile(r"vacancy|job", re.I))
+            if not cards:
+                cards = soup.find_all("li")
+            
+            for card in cards[:limit]:
+                try:
+                    title_tag = card.find("a")
+                    if not title_tag:
                         continue
-                
-                await browser.close()
-                
+                    
+                    title = title_tag.get_text(strip=True)
+                    link = title_tag.get("href", "")
+                    if link and not link.startswith("http"):
+                        link = f"https://geekjob.ru{link}"
+                    
+                    company_tag = card.find(class_=re.compile(r"company|employer", re.I))
+                    company = company_tag.get_text(strip=True) if company_tag else "Не указано"
+                    
+                    salary_tag = card.find(class_=re.compile(r"salary|compensation", re.I))
+                    salary = salary_tag.get_text(strip=True) if salary_tag else "Не указано"
+                    
+                    location_tag = card.find(class_=re.compile(r"location|city", re.I))
+                    location = location_tag.get_text(strip=True) if location_tag else "Не указано"
+                    
+                    if title and len(title) > 3:
+                        results.append({
+                            "title": title,
+                            "company": company,
+                            "salary": salary,
+                            "location": location,
+                            "url": link,
+                            "source": "geekjob.ru"
+                        })
+                        logger.info(f"✅ GeekJob: {title[:40]}...")
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ GeekJob: {e}")
+                    continue
+                    
         except Exception as e:
-            logger.error(f"❌ GeekJobParser: критическая ошибка: {e}", exc_info=True)
+            logger.error(f"❌ GeekJob: {e}", exc_info=True)
         
-        logger.info(f"📊 GeekJobParser: всего найдено {len(results)} вакансий")
+        logger.info(f"📊 GeekJob: найдено {len(results)}")
         return results
