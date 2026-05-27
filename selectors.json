@@ -1,1 +1,32 @@
-
+{
+  "hh.ru": {
+    "search_url": "https://hh.ru/search/vacancy?text={query}&area=1",
+    "vacancy_card": "div.vacancy-serp-item",
+    "title": "a.bloko-link",
+    "company": "span.vacancy-serp-item__employer-name",
+    "salary": "span.bloko-text",
+    "location": "span.vacancy-serp-item__address",
+    "url": "a.bloko-link",
+    "url_prefix": ""
+  },
+  "getmatch.ru": {
+    "search_url": "https://getmatch.ru/vacancies?search={query}",
+    "vacancy_card": "div.vacancy-card",
+    "title": "a.vacancy-card__title",
+    "company": "span.vacancy-card__company",
+    "salary": "span.vacancy-card__salary",
+    "location": "span.vacancy-card__location",
+    "url": "a.vacancy-card__title",
+    "url_prefix": "https://getmatch.ru"
+  },
+  "geekjob.ru": {
+    "search_url": "https://geekjob.ru/vacancies?q={query}",
+    "vacancy_card": "div.job-item",
+    "title": "h3.job-title a",
+    "company": "span.job-company",
+    "salary": "span.job-salary",
+    "location": "span.job-location",
+    "url": "h3.job-title a",
+    "url_prefix": "https://geekjob.ru"
+  }
+}
