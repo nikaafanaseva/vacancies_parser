@@ -1,86 +1,74 @@
-import logging
-import re
+import aiohttp
+import asyncio
+import random
 from bs4 import BeautifulSoup
-from firecrawl import FirecrawlApp
-
-from parsers.firecrawl_utils import unpack_firecrawl_response
+import logging
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
-
-class GetMatchParser:
-    def __init__(self, api_key: str):
-        self.base_url = "https://getmatch.ru/vacancies"
-        self.app = FirecrawlApp(api_key=api_key)
-
-    async def search(self, query: str, limit: int = 5) -> list:
-        results = []
-        try:
-            url = f"{self.base_url}?search={query.replace(' ', '+')}"
-            logger.info(f"GetMatch URL: {url}")
-
-            response = self.app.scrape_url(url, formats=["markdown", "html"])
-            html, markdown = unpack_firecrawl_response(response)
-
-            # 1) HTML
-            if html:
-                soup = BeautifulSoup(html, "lxml")
-                cards = soup.find_all(["article", "div", "li"], class_=re.compile(r"vacancy|job", re.I))
-
-                for card in cards:
-                    if len(results) >= limit:
-                        break
-
-                    title_tag = card.find(["h2", "h3", "a"])
-                    if not title_tag:
-                        continue
-
-                    title = title_tag.get_text(" ", strip=True)
-                    if len(title) < 4:
-                        continue
-
-                    link_tag = card.find("a")
-                    link = link_tag.get("href", "") if link_tag else ""
-                    if link and link.startswith("/"):
-                        link = f"https://getmatch.ru{link}"
-
-                    company_tag = card.find(class_=re.compile(r"company|employer", re.I))
-                    salary_tag = card.find(class_=re.compile(r"salary|compensation", re.I))
-                    location_tag = card.find(class_=re.compile(r"location|city", re.I))
-
-                    results.append(
-                        {
-                            "title": title,
-                            "company": company_tag.get_text(" ", strip=True) if company_tag else "Не указано",
-                            "salary": salary_tag.get_text(" ", strip=True) if salary_tag else "Не указана",
-                            "location": location_tag.get_text(" ", strip=True) if location_tag else "Не указано",
-                            "url": link,
-                            "source": "getmatch.ru",
-                        }
-                    )
-
-            # 2) Fallback markdown
-            if len(results) < limit and markdown:
-                links = re.findall(r"\[([^\]]+)\]\((https?://getmatch\.ru[^\)]+)\)", markdown)
-                for title, link in links:
-                    if len(results) >= limit:
-                        break
-                    title = title.strip()
-                    if len(title) < 4:
-                        continue
-                    results.append(
-                        {
-                            "title": title,
-                            "company": "Не указано",
-                            "salary": "Не указана",
-                            "location": "Не указано",
-                            "url": link,
-                            "source": "getmatch.ru",
-                        }
-                    )
-
-        except Exception as e:
-            logger.error(f"GetMatchParser error: {e}", exc_info=True)
-
-        logger.info(f"GetMatch: найдено {len(results)}")
-        return results
+async def get_getmatch_vacancies(keyword: str):
+    """Парсинг вакансий с getmatch.ru"""
+    vacancies = []
+    
+    encoded_keyword = urllib.parse.quote(keyword)
+    url = f"https://getmatch.ru/vacancies?search={encoded_keyword}"
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    }
+    
+    logger.info(f"GetMatch URL: {url}")
+    
+    try:
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=15) as response:
+                
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    cards = soup.find_all('div', class_='vacancy-card')
+                    if not cards:
+                        cards = soup.find_all('div', class_='vacancy-item')
+                    
+                    for card in cards[:5]:
+                        try:
+                            title_elem = card.find('a', class_='vacancy-title')
+                            if not title_elem:
+                                title_elem = card.find('h3')
+                            
+                            if title_elem:
+                                title = title_elem.text.strip()
+                                link = title_elem.get('href', '')
+                                if link and not link.startswith('http'):
+                                    link = 'https://getmatch.ru' + link
+                            else:
+                                continue
+                            
+                            company_elem = card.find('div', class_='company-name')
+                            company = company_elem.text.strip() if company_elem else 'Не указана'
+                            
+                            vacancies.append({
+                                'title': title,
+                                'company': company,
+                                'salary': 'Не указана',
+                                'city': 'Не указан',
+                                'url': link,
+                                'source': 'getmatch.ru'
+                            })
+                        except Exception as e:
+                            logger.error(f"Ошибка GetMatch: {e}")
+                            continue
+                    
+                else:
+                    logger.warning(f"GetMatch статус: {response.status}")
+                    
+    except Exception as e:
+        logger.error(f"GetMatch ошибка: {e}")
+    
+    logger.info(f"GetMatch: найдено {len(vacancies)}")
+    return vacancies
