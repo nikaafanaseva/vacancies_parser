@@ -1,74 +1,112 @@
 import aiohttp
-import asyncio
-import random
-from bs4 import BeautifulSoup
 import logging
-import urllib.parse
+import asyncio
+import re
+from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
 
 logger = logging.getLogger(__name__)
 
-async def get_getmatch_vacancies(keyword: str):
-    """Парсинг вакансий с getmatch.ru"""
-    vacancies = []
+
+class GetMatchParser:
+    """Парсер getmatch.ru с обходом блокировок"""
     
-    encoded_keyword = urllib.parse.quote(keyword)
-    url = f"https://getmatch.ru/vacancies?search={encoded_keyword}"
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    }
-    
-    logger.info(f"GetMatch URL: {url}")
-    
-    try:
-        await asyncio.sleep(random.uniform(0.5, 1.5))
+    def __init__(self):
+        self.ua = UserAgent()
+        self.base_url = "https://getmatch.ru/vacancies"
+
+    def _get_headers(self):
+        return {
+            "User-Agent": self.ua.random,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Referer": "https://getmatch.ru/",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Cache-Control": "max-age=0",
+        }
+
+    async def search(self, query: str, limit: int = 10) -> list:
+        results = []
+        params = {"search": query}
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=15) as response:
-                
-                if response.status == 200:
-                    html = await response.text()
-                    soup = BeautifulSoup(html, 'html.parser')
+        try:
+            logger.info(f"🔍 GetMatch: поиск '{query}'")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    self.base_url,
+                    params=params,
+                    headers=self._get_headers(),
+                    timeout=aiohttp.ClientTimeout(total=30),
+                    allow_redirects=True
+                ) as resp:
+                    if resp.status != 200:
+                        logger.error(f"❌ GetMatch: HTTP {resp.status}")
+                        return []
+                    html = await resp.text()
+            
+            soup = BeautifulSoup(html, 'lxml')
+            
+            # Ищем карточки вакансий разными способами
+            cards = (
+                soup.find_all("div", class_=re.compile(r"vacancy", re.I)) or
+                soup.find_all("article") or
+                soup.find_all("li", class_=re.compile(r"vacancy|job", re.I))
+            )
+            
+            logger.info(f"📦 GetMatch: найдено {len(cards)} карточек")
+            
+            for card in cards[:limit]:
+                try:
+                    # Заголовок
+                    title_tag = (
+                        card.find(["h2", "h3", "h4"], class_=re.compile(r"title", re.I)) or
+                        card.find("a", class_=re.compile(r"title", re.I)) or
+                        card.find(["h2", "h3"])
+                    )
+                    if not title_tag:
+                        continue
                     
-                    cards = soup.find_all('div', class_='vacancy-card')
-                    if not cards:
-                        cards = soup.find_all('div', class_='vacancy-item')
+                    title = title_tag.get_text(strip=True)
                     
-                    for card in cards[:5]:
-                        try:
-                            title_elem = card.find('a', class_='vacancy-title')
-                            if not title_elem:
-                                title_elem = card.find('h3')
-                            
-                            if title_elem:
-                                title = title_elem.text.strip()
-                                link = title_elem.get('href', '')
-                                if link and not link.startswith('http'):
-                                    link = 'https://getmatch.ru' + link
-                            else:
-                                continue
-                            
-                            company_elem = card.find('div', class_='company-name')
-                            company = company_elem.text.strip() if company_elem else 'Не указана'
-                            
-                            vacancies.append({
-                                'title': title,
-                                'company': company,
-                                'salary': 'Не указана',
-                                'city': 'Не указан',
-                                'url': link,
-                                'source': 'getmatch.ru'
-                            })
-                        except Exception as e:
-                            logger.error(f"Ошибка GetMatch: {e}")
-                            continue
+                    # Ссылка
+                    link_tag = card.find("a", href=True)
+                    link = link_tag["href"] if link_tag else ""
+                    if link and not link.startswith("http"):
+                        link = f"https://getmatch.ru{link}"
                     
-                else:
-                    logger.warning(f"GetMatch статус: {response.status}")
+                    # Компания
+                    company_tag = card.find(class_=re.compile(r"company|employer", re.I))
+                    company = company_tag.get_text(strip=True) if company_tag else "Не указано"
                     
-    except Exception as e:
-        logger.error(f"GetMatch ошибка: {e}")
-    
-    logger.info(f"GetMatch: найдено {len(vacancies)}")
-    return vacancies
+                    # Зарплата
+                    salary_tag = card.find(class_=re.compile(r"salary|compensation|price", re.I))
+                    salary = salary_tag.get_text(strip=True) if salary_tag else "Не указано"
+                    
+                    # Город
+                    location_tag = card.find(class_=re.compile(r"location|city|address", re.I))
+                    location = location_tag.get_text(strip=True) if location_tag else "Не указано"
+                    
+                    if title and len(title) > 3:
+                        results.append({
+                            "title": title,
+                            "company": company,
+                            "salary": salary,
+                            "location": location,
+                            "url": link,
+                            "source": "getmatch.ru",
+                        })
+                except Exception as e:
+                    logger.warning(f"⚠️ GetMatch: {e}")
+                    continue
+            
+            logger.info(f"✅ GetMatch: {len(results)} вакансий")
+            
+        except asyncio.TimeoutError:
+            logger.error("❌ GetMatch: таймаут")
+        except Exception as e:
+            logger.error(f"❌ GetMatch: {e}", exc_info=True)
+        
+        return results
