@@ -1,93 +1,88 @@
+import aiohttp
+import asyncio
 import logging
-import re
-from bs4 import BeautifulSoup
-from firecrawl import FirecrawlApp
-
-from parsers.firecrawl_utils import unpack_firecrawl_response
+from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
 
 class HHParser:
-    def __init__(self, api_key: str):
-        self.base_url = "https://hh.ru/search/vacancy"
-        self.app = FirecrawlApp(api_key=api_key)
+    """
+    Парсер вакансий через публичный API hh.ru.
+    
+    НЕ НУЖЕН Firecrawl! НЕ НУЖЕН BeautifulSoup!
+    API сам возвращает готовый JSON с вакансиями.
+    """
 
-    async def search(self, query: str, limit: int = 5) -> list:
+    def __init__(self, api_key: str = ""):
+        # api_key не нужен — API публичный
+        self.base_url = "https://api.hh.ru/vacancies"
+        self.headers = {
+            "User-Agent": "VacancyBot/1.0 (your@email.com)",
+            "Accept": "application/json",
+        }
+
+    async def search(self, query: str, limit: int = 5) -> List[Dict]:
         results = []
         try:
-            url = f"{self.base_url}?text={query.replace(' ', '+')}"
-            logger.info(f"HH URL: {url}")
+            params = {
+                "text": query,
+                "area": 1,              # 1 = Москва, 113 = вся Россия
+                "per_page": limit,
+                "page": 0,
+                "order_by": "publication_time",
+            }
 
-            # ВАЖНО: в новой версии firecrawl-py НЕ используем params=
-            response = self.app.scrape_url(url, formats=["markdown", "html"])
-            html, markdown = unpack_firecrawl_response(response)
+            logger.info(f"HH API запрос: {query}")
 
-            # 1) Пытаемся вытащить из HTML
-            if html:
-                soup = BeautifulSoup(html, "lxml")
-                cards = soup.select('[data-qa="vacancy-serp__vacancy"]')
-                if not cards:
-                    cards = soup.select("div.vacancy-serp-item")
+            async with aiohttp.ClientSession(headers=self.headers) as session:
+                async with session.get(
+                    self.base_url,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.error(f"HH API ошибка: статус {resp.status}")
+                        return results
 
-                for card in cards:
-                    if len(results) >= limit:
-                        break
+                    data = await resp.json()
 
-                    title_tag = card.select_one('[data-qa="serp-item__title"]') or card.select_one("a")
-                    if not title_tag:
-                        continue
+            items = data.get("items", [])
+            logger.info(f"HH API: получено {len(items)} вакансий из {data.get('found', 0)}")
 
-                    title = title_tag.get_text(" ", strip=True)
-                    if len(title) < 4:
-                        continue
-
-                    link = title_tag.get("href", "")
-                    if link and not link.startswith("http"):
-                        link = f"https://hh.ru{link}"
-
-                    company_tag = card.select_one('[data-qa="vacancy-serp__vacancy-employer-text"]')
-                    company = company_tag.get_text(" ", strip=True) if company_tag else "Не указано"
-
-                    salary_tag = card.select_one('[data-qa*="vacancy-compensation"]')
-                    salary = salary_tag.get_text(" ", strip=True) if salary_tag else "Не указана"
-
-                    city_tag = card.select_one('[data-qa="vacancy-serp__vacancy-address"]')
-                    city = city_tag.get_text(" ", strip=True) if city_tag else "Не указано"
-
-                    results.append(
-                        {
-                            "title": title,
-                            "company": company,
-                            "salary": salary,
-                            "location": city,
-                            "url": link,
-                            "source": "hh.ru",
-                        }
+            for item in items:
+                # Зарплата
+                salary = item.get("salary")
+                salary_str = "Не указана"
+                if salary:
+                    parts = []
+                    if salary.get("from"):
+                        parts.append(f"от {salary['from']}")
+                    if salary.get("to"):
+                        parts.append(f"до {salary['to']}")
+                    cur = {"RUR": "руб.", "USD": "$", "EUR": "€"}.get(
+                        salary.get("currency", ""), salary.get("currency", "")
                     )
+                    if parts:
+                        salary_str = f"{' '.join(parts)} {cur}"
 
-            # 2) Fallback: парсим markdown-ссылки
-            if len(results) < limit and markdown:
-                links = re.findall(r"\[([^\]]+)\]\((https?://hh\.ru/vacancy/[^\)]+)\)", markdown)
-                for title, link in links:
-                    if len(results) >= limit:
-                        break
-                    title = title.strip()
-                    if len(title) < 4:
-                        continue
-                    results.append(
-                        {
-                            "title": title,
-                            "company": "Не указано",
-                            "salary": "Не указана",
-                            "location": "Не указано",
-                            "url": link,
-                            "source": "hh.ru",
-                        }
-                    )
+                # Город
+                address = item.get("address")
+                city = address.get("raw", "Не указано") if address else "Не указано"
 
+                results.append({
+                    "title": item.get("name", "Без названия"),
+                    "company": item.get("employer", {}).get("name", "Не указано"),
+                    "salary": salary_str,
+                    "location": city,
+                    "url": item.get("alternate_url", ""),
+                    "source": "hh.ru",
+                })
+
+        except asyncio.TimeoutError:
+            logger.error("HH API: таймаут")
         except Exception as e:
-            logger.error(f"HHParser error: {e}", exc_info=True)
+            logger.error(f"HH API ошибка: {e}", exc_info=True)
 
         logger.info(f"HH: найдено {len(results)}")
         return results
