@@ -18,7 +18,7 @@ class HHParser:
         # api_key не нужен — API публичный
         self.base_url = "https://api.hh.ru/vacancies"
         self.headers = {
-            "User-Agent": "VacancyBot/1.0 (your@email.com)",
+            "User-Agent": "VacancyBot/1.0 (nika.afanaseva@gmail.com)",
             "Accept": "application/json",
         }
 
