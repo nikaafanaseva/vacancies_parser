@@ -1,6 +1,8 @@
 import logging
 import sys
+import os
 import asyncio
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message
@@ -10,6 +12,7 @@ from parsers.getmatch_parser import GetMatchParser
 from parsers.geekjob_parser import GeekJobParser
 from utils import format_results, safe_format_query
 
+# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -17,9 +20,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Инициализация бота и диспетчера
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
+# Инициализация парсеров
 parsers = {
     "hh.ru": HHParser(),
     "getmatch.ru": GetMatchParser(),
@@ -54,6 +59,7 @@ async def cmd_search(message: Message):
     query = safe_format_query(args[1])
     status_msg = await message.answer(f"🔎 <b>Поиск по запросу:</b> <code>{query}</code>...", parse_mode="HTML")
 
+    # Собираем задачи только для включённых источников
     tasks = [
         parsers[source].search(query, limit=settings.MAX_RESULTS)
         for source in settings.ENABLED_SOURCES
@@ -66,6 +72,7 @@ async def cmd_search(message: Message):
         await status_msg.edit_text(f"❌ Ошибка при поиске: <code>{e}</code>", parse_mode="HTML")
         return
 
+    # Объединяем результаты
     all_results = []
     for res in results_lists:
         if isinstance(res, list):
@@ -77,6 +84,7 @@ async def cmd_search(message: Message):
         await status_msg.edit_text("😔 <b>Ничего не найдено</b>\nПопробуй:\n• Изменить формулировку\n• Убрать редкие ключевые слова\n• Проверить позже", parse_mode="HTML")
         return
 
+    # Отправляем отформатированный список
     formatted = format_results(all_results[:settings.MAX_RESULTS])
     await status_msg.edit_text(formatted, parse_mode="HTML", disable_web_page_preview=True)
 
@@ -89,7 +97,22 @@ async def echo_handler(message: Message):
     )
 
 async def main():
-    logger.info("🚀 Vacancy bot starting...")
+    # 1️⃣ Лёгкий HTTP-сервер для Render (чтобы бесплатный тариф не засыпал)
+    async def handle(request):
+        return web.Response(text="✅ Bot is alive and polling.")
+    
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logging.info(f"🌐 Health server running on port {port}")
+
+    # 2️⃣ Запуск Telegram бота
+    logging.info("🤖 Starting bot polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
