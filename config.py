@@ -1,20 +1,12 @@
-from pydantic_settings import BaseSettings
-from pydantic import Field
-from typing import List
+import os
+from dotenv import load_dotenv
 
-class Settings(BaseSettings):
-    BOT_TOKEN: str = Field(..., description="Telegram bot token")
-    FIRECRAWL_API_KEY: str = Field(..., description="Firecrawl API key")
-    MAX_RESULTS: int = Field(default=5, description="Max results per source")
-    
-    # Читаем как простую строку через запятую — так надёжнее, чем JSON
-    ENABLED_SOURCES: str = Field(default="hh.ru,getmatch.ru,geekjob.ru")
+load_dotenv()
 
-    def get_sources(self) -> List[str]:
-        """Возвращает список источников, разбивая строку по запятым"""
-        return [s.strip() for s in self.ENABLED_SOURCES.split(",") if s.strip()]
-
-    class Config:
-        env_file = ".env"
+class Settings:
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN")
+    FIRECRAWL_API_KEY: str = os.getenv("FIRECRAWL_API_KEY")
+    MAX_RESULTS: int = int(os.getenv("MAX_RESULTS", 5))
+    ENABLED_SOURCES: list = os.getenv("ENABLED_SOURCES", "hh.ru,getmatch.ru,geekjob.ru").split(",")
 
 settings = Settings()
