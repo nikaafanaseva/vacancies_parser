@@ -1,88 +1,103 @@
 import aiohttp
 import asyncio
+import random
+from bs4 import BeautifulSoup
 import logging
-from typing import List, Dict
+import urllib.parse
 
 logger = logging.getLogger(__name__)
 
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+]
 
-class HHParser:
-    """
-    Парсер вакансий через публичный API hh.ru.
+async def get_hh_vacancies(keyword: str):
+    """Парсинг hh.ru через поисковую выдачу (без API)"""
+    vacancies = []
     
-    НЕ НУЖЕН Firecrawl! НЕ НУЖЕН BeautifulSoup!
-    API сам возвращает готовый JSON с вакансиями.
-    """
-
-    def __init__(self, api_key: str = ""):
-        # api_key не нужен — API публичный
-        self.base_url = "https://api.hh.ru/vacancies"
-        self.headers = {
-            "User-Agent": "VacancyBot/1.0 (nika.afanaseva@gmail.com)",
-            "Accept": "application/json",
-        }
-
-    async def search(self, query: str, limit: int = 5) -> List[Dict]:
-        results = []
-        try:
-            params = {
-                "text": query,
-                "area": 1,              # 1 = Москва, 113 = вся Россия
-                "per_page": limit,
-                "page": 0,
-                "order_by": "publication_time",
-            }
-
-            logger.info(f"HH API запрос: {query}")
-
-            async with aiohttp.ClientSession(headers=self.headers) as session:
-                async with session.get(
-                    self.base_url,
-                    params=params,
-                    timeout=aiohttp.ClientTimeout(total=15),
-                ) as resp:
-                    if resp.status != 200:
-                        logger.error(f"HH API ошибка: статус {resp.status}")
-                        return results
-
-                    data = await resp.json()
-
-            items = data.get("items", [])
-            logger.info(f"HH API: получено {len(items)} вакансий из {data.get('found', 0)}")
-
-            for item in items:
-                # Зарплата
-                salary = item.get("salary")
-                salary_str = "Не указана"
-                if salary:
-                    parts = []
-                    if salary.get("from"):
-                        parts.append(f"от {salary['from']}")
-                    if salary.get("to"):
-                        parts.append(f"до {salary['to']}")
-                    cur = {"RUR": "руб.", "USD": "$", "EUR": "€"}.get(
-                        salary.get("currency", ""), salary.get("currency", "")
-                    )
-                    if parts:
-                        salary_str = f"{' '.join(parts)} {cur}"
-
-                # Город
-                address = item.get("address")
-                city = address.get("raw", "Не указано") if address else "Не указано"
-
-                results.append({
-                    "title": item.get("name", "Без названия"),
-                    "company": item.get("employer", {}).get("name", "Не указано"),
-                    "salary": salary_str,
-                    "location": city,
-                    "url": item.get("alternate_url", ""),
-                    "source": "hh.ru",
-                })
-
-        except asyncio.TimeoutError:
-            logger.error("HH API: таймаут")
-        except Exception as e:
-            logger.error(f"HH API ошибка: {e}", exc_info=True)
-
-        logger.info(f"HH: найдено {len(results)}")
-        return results
+    # Кодируем запрос
+    encoded_keyword = urllib.parse.quote(keyword)
+    
+    # Используем поисковую выдачу, а не API
+    url = f"https://hh.ru/search/vacancy?text={encoded_keyword}&area=113&items_on_page=10"
+    
+    # Случайный User-Agent
+    headers = {
+        'User-Agent': random.choice(USER_AGENTS),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
+        'Referer': 'https://hh.ru/',
+    }
+    
+    logger.info(f"HH API запрос: {keyword}")
+    
+    try:
+        # Задержка перед запросом
+        await asyncio.sleep(random.uniform(1, 2))
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=15) as response:
+                
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # Ищем карточки вакансий
+                    items = soup.find_all('div', {'data-qa': 'vacancy-serp__vacancy'})
+                    
+                    if not items:
+                        # Альтернативный селектор для hh
+                        items = soup.find_all('div', class_='serp-item')
+                    
+                    for item in items[:5]:  # Берем первые 5
+                        try:
+                            # Название и ссылка
+                            title_elem = item.find('a', {'data-qa': 'vacancy-serp__vacancy-title'})
+                            if title_elem:
+                                title = title_elem.text.strip()
+                                link = title_elem.get('href')
+                            else:
+                                continue
+                            
+                            # Компания
+                            company_elem = item.find('div', {'data-qa': 'vacancy-serp__vacancy-employer'})
+                            company = company_elem.text.strip() if company_elem else 'Не указана'
+                            
+                            # Зарплата
+                            salary_elem = item.find('span', {'data-qa': 'vacancy-serp__vacancy-compensation'})
+                            salary = salary_elem.text.strip() if salary_elem else 'Зарплата не указана'
+                            
+                            # Город
+                            address_elem = item.find('div', {'data-qa': 'vacancy-serp__vacancy-address'})
+                            city = address_elem.text.strip() if address_elem else 'Город не указан'
+                            
+                            vacancies.append({
+                                'title': title,
+                                'company': company,
+                                'salary': salary,
+                                'city': city,
+                                'url': link,
+                                'source': 'hh.ru'
+                            })
+                        except Exception as e:
+                            logger.error(f"Ошибка парсинга карточки: {e}")
+                            continue
+                    
+                    logger.info(f"HH: найдено {len(vacancies)}")
+                    return vacancies
+                    
+                elif response.status == 403:
+                    logger.error("HH API: доступ запрещен (403) - нужно больше задержка или прокси")
+                    return []
+                else:
+                    logger.error(f"HH API ошибка: статус {response.status}")
+                    return []
+                    
+    except asyncio.TimeoutError:
+        logger.error("HH API: таймаут")
+        return []
+    except Exception as e:
+        logger.error(f"HH API ошибка: {e}")
+        return []
