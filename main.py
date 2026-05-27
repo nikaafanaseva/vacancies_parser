@@ -12,26 +12,20 @@ from parsers.getmatch_parser import GetMatchParser
 from parsers.geekjob_parser import GeekJobParser
 from utils import format_results, safe_format_query
 
-# Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # 🔥 Более подробные логи
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
 
-# Проверка токена
 if not settings.BOT_TOKEN:
-    logger.error("❌ BOT_TOKEN не установлен! Проверьте переменные окружения на Render")
+    logger.error("❌ BOT_TOKEN не установлен!")
     sys.exit(1)
-else:
-    logger.info(f"✅ Token loaded: {settings.BOT_TOKEN[:10]}...")
 
-# Инициализация бота и диспетчера
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
-# Инициализация парсеров
 parsers = {
     "hh.ru": HHParser(),
     "getmatch.ru": GetMatchParser(),
@@ -40,7 +34,6 @@ parsers = {
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    logger.info(f"📩 Получена команда /start от пользователя {message.from_user.id}")
     await message.answer(
         "👋 <b>Бот поиска вакансий</b>\n\n"
         "Используй команду:\n"
@@ -60,34 +53,42 @@ async def cmd_search(message: Message):
     if len(args) < 2:
         await message.answer(
             "❌ <b>Неверный формат</b>\n"
-            "Используй: <code>/search &lt;должность&gt; &lt;ключевые слова&gt;</code>\n"
-            "Пример: <code>/search Java разработчик СПб</code>",
+            "Используй: <code>/search &lt;должность&gt; &lt;ключевые слова&gt;</code>",
             parse_mode="HTML"
         )
         return
 
     query = safe_format_query(args[1])
-    status_msg = await message.answer(f"🔎 <b>Поиск по запросу:</b> <code>{query}</code>...", parse_mode="HTML")
+    logger.info(f"📝 Запрос к парсерам: {query}")
+    
+    status_msg = await message.answer(f"🔎 <b>Поиск...</b>", parse_mode="HTML")
 
-    tasks = [
-        parsers[source].search(query, limit=settings.MAX_RESULTS)
-        for source in settings.ENABLED_SOURCES
-        if source in parsers
-    ]
+    tasks = []
+    for source in settings.ENABLED_SOURCES:
+        if source in parsers:
+            logger.info(f"🚀 Запускаю парсер {source}")
+            tasks.append(parsers[source].search(query, limit=settings.MAX_RESULTS))
 
     try:
         results_lists = await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
-        logger.error(f"❌ Ошибка при поиске: {e}")
-        await status_msg.edit_text(f"❌ Ошибка при поиске: <code>{e}</code>", parse_mode="HTML")
+        logger.error(f"❌ Ошибка gather: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Ошибка: <code>{e}</code>", parse_mode="HTML")
         return
 
     all_results = []
-    for res in results_lists:
-        if isinstance(res, list):
+    for i, res in enumerate(results_lists):
+        source_name = list(settings.ENABLED_SOURCES)[i] if i < len(list(settings.ENABLED_SOURCES)) else f"parser_{i}"
+        
+        if isinstance(res, Exception):
+            logger.error(f"❌ Парсер {source_name} вернул ошибку: {res}", exc_info=True)
+        elif isinstance(res, list):
+            logger.info(f"✅ Парсер {source_name} нашёл {len(res)} вакансий")
             all_results.extend(res)
         else:
-            logger.error(f"Ошибка парсера: {res}")
+            logger.warning(f"⚠️ Парсер {source_name} вернул неожиданный тип: {type(res)}")
+
+    logger.info(f"📊 Всего найдено: {len(all_results)} вакансий")
 
     if not all_results:
         await status_msg.edit_text(
@@ -106,8 +107,7 @@ async def cmd_search(message: Message):
 @dp.message()
 async def echo_handler(message: Message):
     await message.answer(
-        "🤔 Используй команду <code>/search</code> для поиска вакансий.\n"
-        "Например: <code>/search React разработчик удалённо</code>",
+        "🤔 Используй команду <code>/search</code> для поиска вакансий.",
         parse_mode="HTML"
     )
 
