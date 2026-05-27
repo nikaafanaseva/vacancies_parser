@@ -3,7 +3,7 @@ import sys
 import os
 import asyncio
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from config import settings
@@ -13,7 +13,7 @@ from parsers.geekjob_parser import GeekJobParser
 from utils import format_results, safe_format_query
 
 logging.basicConfig(
-    level=logging.DEBUG,  # 🔥 Более подробные логи
+    level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     stream=sys.stdout
 )
@@ -59,20 +59,20 @@ async def cmd_search(message: Message):
         return
 
     query = safe_format_query(args[1])
-    logger.info(f"📝 Запрос к парсерам: {query}")
+    logger.info(f"📝 Запрос: {query}")
     
-    status_msg = await message.answer(f"🔎 <b>Поиск...</b>", parse_mode="HTML")
+    status_msg = await message.answer(f"🔎 <b>Ищу вакансии...</b>", parse_mode="HTML")
 
     tasks = []
     for source in settings.ENABLED_SOURCES:
         if source in parsers:
-            logger.info(f"🚀 Запускаю парсер {source}")
+            logger.info(f"🚀 Запускаю {source}")
             tasks.append(parsers[source].search(query, limit=settings.MAX_RESULTS))
 
     try:
         results_lists = await asyncio.gather(*tasks, return_exceptions=True)
     except Exception as e:
-        logger.error(f"❌ Ошибка gather: {e}", exc_info=True)
+        logger.error(f"❌ Ошибка: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Ошибка: <code>{e}</code>", parse_mode="HTML")
         return
 
@@ -81,22 +81,21 @@ async def cmd_search(message: Message):
         source_name = list(settings.ENABLED_SOURCES)[i] if i < len(list(settings.ENABLED_SOURCES)) else f"parser_{i}"
         
         if isinstance(res, Exception):
-            logger.error(f"❌ Парсер {source_name} вернул ошибку: {res}", exc_info=True)
+            logger.error(f"❌ {source_name}: {res}", exc_info=True)
         elif isinstance(res, list):
-            logger.info(f"✅ Парсер {source_name} нашёл {len(res)} вакансий")
+            logger.info(f"✅ {source_name}: {len(res)} вакансий")
             all_results.extend(res)
         else:
-            logger.warning(f"⚠️ Парсер {source_name} вернул неожиданный тип: {type(res)}")
+            logger.warning(f"⚠️ {source_name}: неожиданный тип {type(res)}")
 
-    logger.info(f"📊 Всего найдено: {len(all_results)} вакансий")
+    logger.info(f"📊 Всего: {len(all_results)} вакансий")
 
     if not all_results:
         await status_msg.edit_text(
             "😔 <b>Ничего не найдено</b>\n"
-            "Попробуй:\n"
-            "• Изменить формулировку\n"
-            "• Убрать редкие ключевые слова\n"
-            "• Проверить позже",
+            "Попробуйте:\n"
+            "• /search Python разработчик\n"
+            "• /search Менеджер проектов",
             parse_mode="HTML"
         )
         return
@@ -107,13 +106,13 @@ async def cmd_search(message: Message):
 @dp.message()
 async def echo_handler(message: Message):
     await message.answer(
-        "🤔 Используй команду <code>/search</code> для поиска вакансий.",
+        "🤔 Используй <code>/search</code> для поиска.",
         parse_mode="HTML"
     )
 
 async def main():
     async def handle(request):
-        return web.Response(text="✅ Bot is alive and polling.")
+        return web.Response(text="✅ Bot is alive")
 
     app = web.Application()
     app.router.add_get("/", handle)
@@ -123,9 +122,9 @@ async def main():
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logging.info(f"🌐 Health server running on port {port}")
+    logging.info(f"🌐 Server on port {port}")
 
-    logging.info("🤖 Starting bot polling...")
+    logging.info("🤖 Starting bot...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
