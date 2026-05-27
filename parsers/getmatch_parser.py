@@ -14,15 +14,11 @@ class GetMatchParser:
     async def search(self, query: str, limit: int = 10) -> list:
         results = []
         params = {"search": query}
-        headers = {
-            "User-Agent": self.ua.random,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "ru-RU,ru;q=0.9",
-        }
+        headers = {"User-Agent": self.ua.random}
         
         try:
             logger.info(f"🔍 GetMatch: запрос '{query}'")
-            timeout = aiohttp.ClientTimeout(total=45)
+            timeout = aiohttp.ClientTimeout(total=30)
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(self.base_url, params=params, headers=headers, timeout=timeout) as resp:
@@ -31,31 +27,31 @@ class GetMatchParser:
                         return []
                     html = await resp.text()
             
-            logger.info(f"📥 GetMatch: получено {len(html)} символов HTML")
+            logger.info(f"📥 GetMatch: получено {len(html)} символов")
             
             soup = BeautifulSoup(html, 'lxml')
             
-            # Пробуем разные селекторы
-            cards = soup.find_all("div", class_=re.compile(r"vacancy", re.I))
+            # Ищем именно карточки вакансий, а не меню
+            cards = soup.find_all("article", class_=re.compile(r"vacancy", re.I))
             if not cards:
-                cards = soup.find_all("article")
+                cards = soup.find_all("div", {"data-testid": re.compile(r"vacancy", re.I)})
             if not cards:
-                cards = soup.find_all("li")
-            
-            logger.info(f"📦 GetMatch: найдено {len(cards)} карточек")
-            
-            # Если карточки не найдены, логируем структуру
-            if not cards:
-                logger.warning(f"⚠️ GetMatch: не найдены карточки. Title: {soup.title.string if soup.title else 'None'}")
-                # Логируем первые 500 символов для отладки
-                logger.debug(f"HTML начало: {html[:500]}")
+                # Если карточки не найдены, логируем и возвращаем пустой список
+                logger.warning("⚠️ GetMatch: карточки вакансий не найдены в HTML")
                 return []
             
+            logger.info(f"📦 GetMatch: найдено {len(cards)} карточек вакансий")
+            
             for card in cards[:limit]:
-                title_tag = card.find(["h2", "h3", "h4", "a"])
+                title_tag = card.find(["h2", "h3", "a"], class_=re.compile(r"title|name", re.I))
                 if not title_tag:
                     continue
+                
                 title = title_tag.get_text(strip=True)
+                
+                # Проверяем, что это действительно вакансия, а не элемент меню
+                if len(title) < 5 or title.lower() in ["зарплаты", "каталог", "работодателям", "разместить вакансию"]:
+                    continue
                 
                 link = ""
                 a_tag = card.find("a", href=True)
@@ -67,15 +63,17 @@ class GetMatchParser:
                 company_tag = card.find(class_=re.compile(r"company|employer", re.I))
                 company = company_tag.get_text(strip=True) if company_tag else "Не указано"
                 
-                if title and len(title) > 3:
-                    results.append({
-                        "title": title,
-                        "company": company,
-                        "salary": "Не указано",
-                        "location": "Не указано",
-                        "url": link,
-                        "source": "getmatch.ru"
-                    })
+                salary_tag = card.find(class_=re.compile(r"salary", re.I))
+                salary = salary_tag.get_text(strip=True) if salary_tag else "Не указано"
+                
+                results.append({
+                    "title": title,
+                    "company": company,
+                    "salary": salary,
+                    "location": "Не указано",
+                    "url": link,
+                    "source": "getmatch.ru"
+                })
             
             logger.info(f"✅ GetMatch: {len(results)} вакансий")
             return results
