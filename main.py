@@ -24,15 +24,14 @@ if not settings.BOT_TOKEN:
     logger.error("BOT_TOKEN не установлен")
     sys.exit(1)
 
-if not settings.FIRECRAWL_API_KEY:
-    logger.error("FIRECRAWL_API_KEY не установлен")
-    sys.exit(1)
+# Firecrawl API key нужен только для getmatch и geekjob.
+# HH.ru использует бесплатный публичный API — ключ не нужен!
 
 bot = Bot(token=settings.BOT_TOKEN)
 dp = Dispatcher()
 
 parsers = {
-    "hh.ru": HHParser(api_key=settings.FIRECRAWL_API_KEY),
+    "hh.ru": HHParser(),  # ← БЕЗ api_key!
     "getmatch.ru": GetMatchParser(api_key=settings.FIRECRAWL_API_KEY),
     "geekjob.ru": GeekJobParser(api_key=settings.FIRECRAWL_API_KEY),
 }
@@ -47,7 +46,7 @@ async def cmd_start(message: Message):
         "Примеры:\n"
         "/search маркетинг\n"
         "/search python разработчик удаленно\n\n"
-        "Источники: hh.ru, getmatch.ru, geekjob.ru"
+        "Источники: hh.ru (API), getmatch.ru, geekjob.ru"
     )
 
 
@@ -80,11 +79,12 @@ async def cmd_search(message: Message):
         return
 
     all_results = []
-    for res in results_lists:
+    for source_name, res in zip(settings.ENABLED_SOURCES, results_lists):
         if isinstance(res, list):
+            logger.info(f"{source_name}: найдено {len(res)} вакансий")
             all_results.extend(res)
         else:
-            logger.error(f"Ошибка парсера: {res}")
+            logger.error(f"{source_name} ошибка: {res}")
 
     if not all_results:
         await status_msg.edit_text(
@@ -94,6 +94,9 @@ async def cmd_search(message: Message):
         return
 
     text = format_results(all_results[: settings.MAX_RESULTS])
+    # Telegram лимит 4096 символов
+    if len(text) > 4000:
+        text = text[:4000] + "\n... (результаты обрезаны)"
     await status_msg.edit_text(text, disable_web_page_preview=True)
 
 
